@@ -1,1 +1,0 @@
-{"dependencies":{"ws":"^8.18.0"},"description":"2 and a Possible - online multiplayer Spades game, second game in the We All Gone Eat suite","engines":{"node":"24.22.1"},"main":"server.js","name":"2-and-a-possible","scripts":{"start":"node server.js","test":"node test/e2e-test.js"},"type":"commonjs","version":"1.0.0"}
