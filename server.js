@@ -33,6 +33,8 @@ function defaultSettings() {
     targetScore: 500,  // 500 | 250 (House Rule: quick game)
     jjdd: false,       // House Rule: Joker Joker Deuce Deuce
     kitty: false,      // House Rule: play with the kitty
+    firstHandBidsItself: false, // House Rule: no bidding on hand 1, the hand scores what it takes
+    blindBids: false,  // House Rule: a team down 100 or more may call a blind team bid before seeing cards
     format: 'partners' // Partners is the v1 format (seats 0+2 vs 1+3)
   };
 }
@@ -43,6 +45,7 @@ function makePlayer(name) {
     name: String(name || 'Player').slice(0, 20),
     ws: null, connected: false, isBot: false, personality: null,
     hand: [], bid: null, tricks: 0, _botTimer: null, _botFor: null,
+    blindDecision: 'none', // none | pending | blind | look | covered
   };
 }
 function makeBot(room) {
@@ -63,6 +66,7 @@ function makeRoom(host) {
     dealerIdx: 0, handNumber: 0,
     scores: [0, 0], bags: [0, 0],
     bids: [null, null, null, null],
+    blindEligible: [false, false], teamBlind: [null, null],
     bidTurn: null, currentTurn: null, leaderIdx: null,
     trick: [], tricksWon: [0, 0, 0, 0], spadesBroken: false,
     kitty: [], kittyCards: [], kittyWinnerIdx: null,
@@ -73,6 +77,9 @@ function makeRoom(host) {
   return room;
 }
 function teamOf(seat) { return seat % 2; }
+// True while the First Hand Bids Itself rule is running this room: the
+// setting is on and the current (or just scored) hand is hand 1.
+function isSelfBidHand(room) { return !!(room.settings.firstHandBidsItself && room.handNumber === 1); }
 function effectiveHost(room) {
   const host = room.players.find(p => p.id === room.hostId);
   if (host && host.connected) return host;
@@ -92,16 +99,23 @@ function shuffle(deck) {
 function stateFor(room, me) {
   const mySeat = room.players.indexOf(me);
   const host = effectiveHost(room);
+  // During the blind window, a player who still owes a blind call has not
+  // seen their cards: the server sends an empty hand, only the count in
+  // the players list. The moment they look or call blind, cards come out.
+  const cardsHidden = room.phase === 'blind' && me.blindDecision === 'pending';
   return {
     type: 'state',
     code: room.code,
     phase: room.phase,
     settings: room.settings,
     isHost: isHost(room, me),
+    blindEligible: room.blindEligible,
+    teamBlind: room.teamBlind,
     you: {
       id: me.id, name: me.name, seat: mySeat,
       team: mySeat >= 0 ? teamOf(mySeat) : null,
-      hand: G.sortHand(me.hand, room.settings),
+      blindDecision: me.blindDecision,
+      hand: cardsHidden ? [] : G.sortHand(me.hand, room.settings),
       bid: me.bid, tricks: me.tricks,
       isBot: !!me.isBot,
       legal: room.phase === 'playing' && room.currentTurn === mySeat
@@ -115,10 +129,12 @@ function stateFor(room, me) {
       isHost: host && p.id === host.id,
       cardCount: p.hand.length,
       bid: p.bid ? G.bidLabel(p.bid) : null,
+      blindDecision: p.blindDecision,
       tricks: p.tricks,
     })),
     dealerIdx: room.dealerIdx,
     handNumber: room.handNumber,
+    selfBidHand: isSelfBidHand(room),
     scores: room.scores, bags: room.bags,
     bidTurn: room.bidTurn, currentTurn: room.currentTurn, leaderIdx: room.leaderIdx,
     trick: room.trick.map(t => ({ seat: t.playerIdx, name: room.players[t.playerIdx].name, card: t.card })),
@@ -152,6 +168,13 @@ function scheduleBot(room, bot, tag, act) {
 function driveBots(room) {
   for (const bot of room.players.filter(p => p.isBot)) {
     const seat = room.players.indexOf(bot);
+    if (room.phase === 'blind' && bot.blindDecision === 'pending') {
+      scheduleBot(room, bot, `blind:${room.handNumber}:${seat}`, () => {
+        if (room.phase !== 'blind' || bot.blindDecision !== 'pending') return;
+        const v = BOTS.chooseBlind(bot.personality, bot.hand, room.settings);
+        handleMessage(room, bot, v ? { type: 'blindDeclare', value: v } : { type: 'blindLook' });
+      });
+    }
     if (room.phase === 'bidding' && room.bidTurn === seat && !bot.bid) {
       scheduleBot(room, bot, `bid:${room.handNumber}:${seat}`, () => {
         if (room.phase !== 'bidding' || room.bidTurn !== seat || bot.bid) return;
@@ -194,8 +217,10 @@ function startHand(room) {
   const hs = G.handSizeFor(s);
   room.players.forEach((p, i) => {
     p.hand = deck.slice(i * hs, (i + 1) * hs);
-    p.bid = null; p.tricks = 0;
+    p.bid = null; p.tricks = 0; p.blindDecision = 'none';
   });
+  room.teamBlind = [null, null];
+  room.blindEligible = [false, false];
   room.kitty = s.kitty ? deck.slice(4 * hs, 4 * hs + G.kittySizeFor(s)) : [];
   room.kittyCards = room.kitty.slice();
   room.bids = [null, null, null, null];
@@ -203,10 +228,56 @@ function startHand(room) {
   room.trick = []; room.lastTrick = null;
   room.spadesBroken = false;
   room.kittyWinnerIdx = null;
+  room.currentTurn = null; room.leaderIdx = null;
+  if (isSelfBidHand(room)) {
+    // First Hand Bids Itself: no bidding round at all on hand 1. No Nil,
+    // no signature bid. With the Kitty on there is no high bidder, so the
+    // dealer does the kitty exchange on this hand.
+    room.bidTurn = null;
+    if (s.kitty) {
+      room.kittyWinnerIdx = room.dealerIdx;
+      const dealer = room.players[room.dealerIdx];
+      dealer.hand = dealer.hand.concat(room.kitty);
+      room.phase = 'kitty';
+      broadcast(room);
+      return;
+    }
+    beginPlay(room);
+    return;
+  }
+  if (s.blindBids) {
+    // Blind Bids window: a team trailing by 100 or more at the start of
+    // the hand may call a blind team bid before seeing any cards. Never
+    // on a First Hand Bids Itself hand (that hand has no bidding at all;
+    // the self bid branch above already returned).
+    for (let t = 0; t < 2; t++) {
+      if (room.scores[t] + 100 <= room.scores[1 - t]) room.blindEligible[t] = true;
+    }
+    if (room.blindEligible[0] || room.blindEligible[1]) {
+      room.players.forEach((p, i) => { if (room.blindEligible[teamOf(i)]) p.blindDecision = 'pending'; });
+      room.phase = 'blind';
+      room.bidTurn = null;
+      broadcast(room);
+      return;
+    }
+  }
   room.phase = 'bidding';
   room.bidTurn = (room.dealerIdx + 1) % 4;
-  room.currentTurn = null; room.leaderIdx = null;
   broadcast(room);
+}
+// The blind window closes when every player who owed a call has made one
+// (declared, looked, or been covered by their partner's declaration).
+// Returns true when it closed the window.
+function checkBlindDone(room) {
+  if (room.phase !== 'blind') return false;
+  if (room.players.some(p => p.blindDecision === 'pending')) return false;
+  if (room.players.every(p => p.bid)) { finishBidding(room); return true; }
+  room.phase = 'bidding';
+  let next = (room.dealerIdx + 1) % 4;
+  while (room.players[next].bid) next = (next + 1) % 4;
+  room.bidTurn = next;
+  broadcast(room);
+  return true;
 }
 function finishBidding(room) {
   // Highest individual bidder takes the kitty. Ties go to the earliest bidder.
@@ -262,17 +333,21 @@ function completeTrick(room) {
   if (room.trickTimer.unref) room.trickTimer.unref();
 }
 function scoreHand(room) {
+  const selfBid = isSelfBidHand(room);
   const results = [];
   for (let team = 0; team < 2; team++) {
     const seats = [team, team + 2];
-    const r = G.scoreTeam(seats.map(s => room.players[s].bid), seats.map(s => room.players[s].tricks), room.bags[team]);
+    const r = selfBid
+      ? G.scoreSelfBidTeam(seats.map(s => room.players[s].tricks), room.bags[team])
+      : G.scoreTeam(seats.map(s => room.players[s].bid), seats.map(s => room.players[s].tricks), room.bags[team]);
     room.scores[team] += r.total;
     room.bags[team] = r.bagsAfter % 10;
     results.push({ team, seats, ...r, scoreAfter: room.scores[team] });
   }
   room.lastHand = {
     handNumber: room.handNumber,
-    bids: room.players.map(p => G.bidLabel(p.bid)),
+    selfBid,
+    bids: selfBid ? room.players.map(() => 'Bids itself') : room.players.map(p => G.bidLabel(p.bid)),
     tricks: room.players.map(p => p.tricks),
     results,
     scores: room.scores.slice(),
@@ -300,6 +375,8 @@ function handleMessage(room, player, msg) {
       if ([500, 250].includes(s.targetScore)) room.settings.targetScore = s.targetScore;
       if (typeof s.jjdd === 'boolean') room.settings.jjdd = s.jjdd;
       if (typeof s.kitty === 'boolean') room.settings.kitty = s.kitty;
+      if (typeof s.firstHandBidsItself === 'boolean') room.settings.firstHandBidsItself = s.firstHandBidsItself;
+      if (typeof s.blindBids === 'boolean') room.settings.blindBids = s.blindBids;
       broadcast(room);
       break;
     }
@@ -328,6 +405,36 @@ function handleMessage(room, player, msg) {
       startGame(room);
       break;
     }
+    case 'blindDeclare': {
+      if (room.phase !== 'blind') return fail(player, 'Blind bids are only called before anyone looks at their cards.');
+      if (player.blindDecision === 'look') return fail(player, 'You already looked at your cards. Blind is off the table for you this hand.');
+      if (player.blindDecision !== 'pending') return fail(player, 'Blind is not open to you on this hand.');
+      const team = teamOf(seat);
+      if (room.teamBlind[team]) return fail(player, 'Your team already has a blind bid this hand.');
+      const v = msg.value | 0;
+      if (v < 6 || v > 10) return fail(player, 'Blind bids run from 6 to 10 books.');
+      // A blind bid is a TEAM bid: this number is the team's whole target.
+      // The declarer becomes the team's bidder of record, and the partner
+      // is covered: they place no bid of their own this hand.
+      room.teamBlind[team] = { value: v, declarerSeat: seat };
+      player.bid = { kind: 'blind', value: v };
+      room.bids[seat] = player.bid;
+      player.blindDecision = 'blind';
+      const mateSeat = (seat + 2) % 4;
+      const mate = room.players[mateSeat];
+      mate.bid = { kind: 'blindCovered' };
+      room.bids[mateSeat] = mate.bid;
+      if (mate.blindDecision === 'pending') mate.blindDecision = 'covered';
+      if (!checkBlindDone(room)) broadcast(room);
+      break;
+    }
+    case 'blindLook': {
+      if (room.phase !== 'blind') return fail(player, 'There is no blind call to make right now.');
+      if (player.blindDecision !== 'pending') return fail(player, 'You already made your blind call for this hand.');
+      player.blindDecision = 'look';
+      if (!checkBlindDone(room)) broadcast(room);
+      break;
+    }
     case 'bid': {
       if (room.phase !== 'bidding') return fail(player, 'Bidding is not open right now.');
       if (room.bidTurn !== seat) return fail(player, 'Not your bid yet.');
@@ -347,7 +454,7 @@ function handleMessage(room, player, msg) {
     }
     case 'kittyDiscard': {
       if (room.phase !== 'kitty') return fail(player, 'No kitty exchange right now.');
-      if (room.kittyWinnerIdx !== seat) return fail(player, 'The kitty belongs to the high bidder.');
+      if (room.kittyWinnerIdx !== seat) return fail(player, 'The kitty is not yours to work on this hand.');
       const need = G.kittySizeFor(room.settings);
       const ids = Array.isArray(msg.cardIds) ? msg.cardIds : [];
       if (ids.length !== need || new Set(ids).size !== need) return fail(player, `Pick exactly ${need} cards to put back.`);
@@ -386,7 +493,8 @@ function handleMessage(room, player, msg) {
     case 'playAgain': {
       if (!isHost(room, player)) return fail(player, 'Only the host can restart.');
       if (room.phase !== 'gameOver') return fail(player, 'The game is not over yet.');
-      for (const p of room.players) { p.hand = []; p.bid = null; p.tricks = 0; }
+      for (const p of room.players) { p.hand = []; p.bid = null; p.tricks = 0; p.blindDecision = 'none'; }
+      room.teamBlind = [null, null]; room.blindEligible = [false, false];
       room.winnerTeam = null; room.lastHand = null; room.phase = 'lobby';
       broadcast(room);
       break;

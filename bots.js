@@ -104,10 +104,21 @@ function chooseCard(personalityKey, hand, plays, settings, spadesBroken, mySeat,
   return sorted[0].id; // cannot win: shed the cheapest card
 }
 
+// Blind Bids call, made from the bot's own dealt hand (the server holds
+// the cards; the bot has not "seen" them in story terms, this is just its
+// fixed rule). A bot declares Blind 6, the floor, only on a strong hand:
+// 5 or more expected books (Bold Talker swings at 4.5). Anything less and
+// the bot looks at its cards and bids normally. Returns 6 or null.
+function chooseBlind(personalityKey, hand, settings) {
+  const est = estimateTricks(hand, settings);
+  const bar = personalityKey === 'bold' ? 4.5 : 5;
+  return est >= bar ? 6 : null;
+}
+
 // Kitty exchange: keep trump and high cards, shed low plain cards.
 function chooseKittyDiscards(personalityKey, hand, settings, count) {
   const sorted = hand.slice().sort((a, b) => cardCost(a, settings) - cardCost(b, settings));
   return sorted.slice(0, count).map(c => c.id);
 }
 
-module.exports = { PERSONALITIES, PERSONALITY_ORDER, BOT_NAMES, estimateTricks, chooseBid, chooseCard, chooseKittyDiscards };
+module.exports = { PERSONALITIES, PERSONALITY_ORDER, BOT_NAMES, estimateTricks, chooseBid, chooseBlind, chooseCard, chooseKittyDiscards };

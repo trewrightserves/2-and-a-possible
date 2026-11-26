@@ -106,11 +106,16 @@ function legalCards(hand, plays, settings, spadesBroken) {
 //   { kind: 'num', value: 1..13 }
 //   { kind: 'nil' }
 //   { kind: 'possible' }  the signature "2 and a Possible" bid, counts as 2
+//   { kind: 'blind', value: 6..10 }  a Blind Bids team bid, declared before
+//        the declarer saw any cards. It is the whole TEAM bid for the hand.
+//   { kind: 'blindCovered' }  the blind declarer's partner. Counts as 0:
+//        the partner adds no bid of their own on a blind hand.
 function bidValue(bid) {
   if (!bid) return 0;
   if (bid.kind === 'num') return bid.value;
   if (bid.kind === 'possible') return 2;
-  return 0; // nil
+  if (bid.kind === 'blind') return bid.value;
+  return 0; // nil and blindCovered
 }
 
 function parseBid(msg) {
@@ -126,6 +131,8 @@ function bidLabel(bid) {
   if (!bid) return 'no bid';
   if (bid.kind === 'nil') return 'Nil';
   if (bid.kind === 'possible') return '2 and a Possible';
+  if (bid.kind === 'blind') return `Blind ${bid.value}`;
+  if (bid.kind === 'blindCovered') return 'Blind (team)';
   return String(bid.value);
 }
 
@@ -147,16 +154,27 @@ function bidLabel(bid) {
 //        Exactly 2 personal tricks: no bonus, no penalty. The bid is made.
 //        0 or 1 personal tricks: minus 20. The missed guarantee does not by
 //        itself set the team; the team set is decided by team tricks vs team bid.
+//   Blind bid (a team bid, so at most one per team; the partner's bid is
+//   blindCovered and adds 0, which makes teamBid equal the blind number):
+//        Team makes the bid: the blind books pay double. That is an extra
+//        10 points per blind book on top of the normal 10, so a made
+//        Blind 7 scores 140 plus overtricks at 1 point each, with sandbag
+//        accounting exactly as usual.
+//        Team is set: minus 10 per bid book as usual. The set penalty is
+//        NOT doubled.
 function scoreTeam(bids, tricks, bagsBefore) {
   const teamBid = bids.reduce((sum, b) => sum + bidValue(b), 0);
+  const blindValue = bids.reduce((sum, b) => sum + (b && b.kind === 'blind' ? b.value : 0), 0);
   const teamTricks = tricks[0] + tricks[1];
   let base = 0;
   let bagsEarned = 0;
   let set = false;
+  let blindAdj = 0;
   if (teamBid > 0) {
     if (teamTricks >= teamBid) {
       bagsEarned = teamTricks - teamBid;
-      base = 10 * teamBid + bagsEarned;
+      blindAdj = 10 * blindValue; // the double pay on the blind books
+      base = 10 * teamBid + bagsEarned + blindAdj;
     } else {
       base = -10 * teamBid;
       set = true;
@@ -189,7 +207,25 @@ function scoreTeam(bids, tricks, bagsBefore) {
   return {
     teamBid, teamTricks, base, set,
     bagsEarned: set ? 0 : bagsEarned, bagsBefore, bagsAfter, bagPenalty,
-    nilAdj, nilResults, possibleAdj, possibleResults, total,
+    nilAdj, nilResults, possibleAdj, possibleResults, blindAdj, blindValue, total,
+  };
+}
+
+// Scores one team for a "First Hand Bids Itself" hand (House Rule).
+// There are no bids on that hand: the team's bid IS the number of books
+// the team actually took, so the hand can never be set and there are no
+// overtricks. Exact scoring: 10 points per book taken, no sandbags earned
+// (bagsAfter equals bagsBefore, so no sandbag penalty can land on this
+// hand), no Nil and no Possible adjustments. Same breakdown shape as
+// scoreTeam so the client and tests read it the same way.
+function scoreSelfBidTeam(tricks, bagsBefore) {
+  const teamTricks = tricks[0] + tricks[1];
+  return {
+    teamBid: teamTricks, teamTricks, base: 10 * teamTricks, set: false,
+    bagsEarned: 0, bagsBefore, bagsAfter: bagsBefore, bagPenalty: 0,
+    nilAdj: 0, nilResults: [], possibleAdj: 0, possibleResults: [],
+    blindAdj: 0, blindValue: 0,
+    total: 10 * teamTricks, selfBid: true,
   };
 }
 
@@ -207,5 +243,5 @@ function sortHand(hand, settings) {
 module.exports = {
   SUITS, SUIT_LABEL, buildDeck, handSizeFor, kittySizeFor,
   effectiveSuit, isTrump, trumpPower, trickWinner, legalCards,
-  bidValue, parseBid, bidLabel, scoreTeam, sortHand, rankLabel,
+  bidValue, parseBid, bidLabel, scoreTeam, scoreSelfBidTeam, sortHand, rankLabel,
 };

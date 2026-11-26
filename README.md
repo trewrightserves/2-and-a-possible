@@ -38,10 +38,14 @@ Optional environment variables:
    Dealer rotates every hand.
 3. **Bidding** - each player bids once, starting left of the dealer: a
    number from 1 up to the cards in hand, Nil, or the signature bid. The
-   team bid is the two partners' bids added together.
+   team bid is the two partners' bids added together. Exception: with the
+   First Hand Bids Itself rule on, hand 1 has no bidding round at all.
+   With Blind Bids on, a blind window comes before bidding on any hand
+   where a team trails by 100 or more: see House Rule 5.
 4. **Kitty exchange** (Kitty rule only) - the highest individual bidder
    picks up the kitty, then puts 4 cards back. Ties go to the earliest
-   bidder.
+   bidder. Exception: with First Hand Bids Itself also on, hand 1 has no
+   high bidder, so the dealer does the exchange on that hand.
 5. **Play** - the player left of the dealer leads the first trick. Follow
    suit if you can. Spades are trump and cannot be led until broken, unless
    a hand is all spades. Trick winner leads the next trick.
@@ -98,6 +102,44 @@ number. Exact scoring, as implemented:
    any 4 back face down. The discards are out of the hand and score
    nothing. The hand plays 12 tricks.
 3. **Quick Game** - play to 250 instead of 500.
+4. **First Hand Bids Itself** - hand 1 has no bidding round at all: no
+   number bids, no Nil, and no signature bid. The hand plays out and each
+   team's bid for that hand is set after the fact to the number of books
+   the team actually took. Exact scoring for hand 1: 10 points per book
+   taken, and that is all. Nobody can be set, no overtricks exist (the bid
+   equals the books), no sandbags are earned on hand 1 so the team's
+   cumulative sandbag count does not move and no sandbag penalty can land
+   on that hand, and there are no Nil or Possible adjustments. From hand 2
+   onward bidding is completely normal. If the Kitty is also on, hand 1
+   has no highest bidder, so the dealer picks up the kitty and puts any 4
+   back on that hand; hands 2 and later use the high bidder as usual. The
+   target score is unchanged.
+5. **Blind Bids** - **a blind bid is a team bid.** At the start of a hand,
+   if a team trails the other team by 100 points or more (score difference
+   of 100 or more, using the current game scores), the hand opens with a
+   blind window: the trailing team's cards are dealt face down and are
+   not sent to those players yet. Each player on the trailing team either
+   calls a blind bid or looks at their cards. Looking ends that player's
+   blind chance for the hand; a player who has looked cannot call blind.
+   A blind bid is 6, 7, 8, 9, or 10, and that number is the team's whole
+   bid for the hand, the combined books the team must take. The declaring
+   player's partner places no bid of their own (their bid is recorded as
+   covered by the blind), and only one blind bid can stand per team per
+   hand: the first declaration locks it. The other team bids normally,
+   unless it is also trailing by 100 or more, which cannot happen for
+   both teams at once. Exact scoring: if the team makes its blind team
+   bid, the blind books pay double, 20 points per book of the blind bid,
+   plus 1 point per overtrick, with sandbag accounting exactly as usual
+   (a made Blind 7 on the number scores 140; a made Blind 7 with 2
+   overtricks scores 142 and earns 2 sandbags). If the team misses, the
+   set penalty is the normal rate, minus 10 points per book of the team
+   bid; the set penalty is not doubled. There is no Blind Nil in this
+   implementation. Blind bids cannot be called on a First Hand Bids
+   Itself hand, because that hand has no bidding at all. With the Kitty
+   on, the blind declarer is their team's bidder of record: the blind
+   value counts in the high bid comparison, and if the declarer is the
+   highest bidder at the table they do the kitty exchange, seeing the
+   kitty when they pick it up.
 
 **Format:** v1 plays **Partners** format only (seats 1 and 3 vs seats 2
 and 4). A Cutthroat (every player for themselves) format is not in v1 and
@@ -108,7 +150,13 @@ there is no toggle for it; it is a candidate for a later version.
 The host can seat bots from the lobby, and starting a game auto fills any
 remaining seats. Bots bid from their own hand strength, play legal cards
 only, work the kitty by shedding their lowest plain cards, and never see
-another player's hand. Personalities: **Steady Eddie** bids what the hand
+another player's hand. Under First Hand Bids Itself, bots simply do not
+bid on hand 1 (nobody does) and play the hand normally; a bot dealing
+hand 1 with the Kitty on works the kitty like any dealer. Under Blind
+Bids, a bot on an eligible trailing team follows one fixed rule: it
+declares Blind 6, the floor, when its dealt hand rates at 5 or more
+expected books (4.5 for Bold Talker), and otherwise looks at its cards
+and bids normally. Personalities: **Steady Eddie** bids what the hand
 shows, **Bold Talker** bids up, **Quiet Storm** plays low and keeps the
 Ace late, **Wild Card** swings on bids and sometimes burns a bigger card
 than the trick needs. Hosting never falls to a bot, and a room closes on
@@ -122,7 +170,7 @@ game.js            Pure logic: deck, trump ranking, tricks, legal plays, scoring
 bots.js            Bot bidding, card play, and kitty choices
 public/index.html  The entire phone client (no build step, no CDN)
 test/e2e-test.js   Unit checks plus scripted WebSocket games
-test/last-run.log  Latest test output (66 checks)
+test/last-run.log  Latest test output (120 checks)
 ```
 
 ## Test
@@ -139,8 +187,19 @@ Possible outcomes), bot judgment, a scripted 4 human hand with a Nil bid
 and a Possible bid where the server score is recomputed independently and
 matched, a JJDD plus Kitty quick game with bots played all the way to a
 winner at 250, the kitty exchange (16 cards in hand, 12 tricks played),
-and seat rejoin by token. Latest verified result: **66 passed, 0 failed**,
-in two consecutive runs.
+and seat rejoin by token. First Hand Bids Itself coverage: the toggle in
+settings, hand 1 skipping bidding and scoring exactly 10 points per book
+with no set possible, hand 2 bidding normally, the rule off leaving hand
+1 unchanged, and a First Hand plus Kitty bot game where the dealer works
+the hand 1 kitty. Blind Bids coverage: the toggle in settings, no blind
+window at level scores or under a 100 point gap, the window opening for
+the trailing team with cards still unseen, the leading team barred, no
+blind after looking, the 6 to 10 range enforced, the partner covered and
+unable to add a bid, a scripted blind hand whose score is recomputed
+independently from the team bid formula (double pay on a made blind, the
+normal set rate on a miss, both checked in the scoring unit tests), and a
+full bot game with Blind Bids on played to a winner. Latest verified
+result: **120 passed, 0 failed**, in two consecutive runs.
 
 ## Deploy notes (not deployed)
 
