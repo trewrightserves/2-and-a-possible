@@ -88,6 +88,10 @@
       <p>Turn it on and the trump order changes at the top: Big Joker, then Little Joker, then the 2 of Spades, then the 2 of Diamonds, then the Ace of Spades on down. Both jokers go in, the 2 of Hearts and the 2 of Clubs come out, and both deuces count as spades for following suit.</p>
       <h3>House Rule: The Kitty</h3>
       <p>Turn it on and each player is dealt 12 cards with 4 cards face down in the kitty. After bidding, the highest individual bidder picks up the kitty (ties go to the earliest bidder), looks at all 16 cards, and puts any 4 back face down. Those 4 are out of the hand and score nothing. Then 12 tricks are played.</p>
+      <h3>House Rule: First Hand Bids Itself</h3>
+      <p>Turn it on and the first hand of the game has no bidding at all. No number bids, no Nil, and no 2 and a Possible on hand 1. The hand just plays out, and each team's bid for that hand is the number of books the team actually takes. The team scores 10 points per book taken, nobody can be set on hand 1, and no sandbags are earned on that hand, so the sandbag count does not move. From hand 2 on, bidding is completely normal. If the Kitty is also on, there is no high bidder on hand 1, so the dealer picks up the kitty and puts 4 back on that hand.</p>
+      <h3>House Rule: Blind Bids</h3>
+      <p><b>A blind bid is a team bid.</b> Turn it on and, at the start of a hand, a team that trails by 100 points or more gets a blind window before anyone on that team sees their cards. A player on the trailing team can call Blind 6, 7, 8, 9, or 10, and that number is the whole team's bid for the hand: the team must take that many books combined. The partner adds no bid of their own, and only one blind bid can stand per team per hand, so the first call locks it. Or the player can look at their cards and bid normally, but once you look, blind is off the table for you that hand. If the team makes its blind bid, the blind books pay double: 20 points per book of the blind bid, plus 1 point per overtrick, with sandbags counted as usual. Blind 7 made on the number pays 140. If the team misses, the set penalty is the normal rate, minus 10 points per book, not doubled. There is no Blind Nil. Blind bids cannot be called on a First Hand Bids Itself hand, because that hand has no bidding at all. With the Kitty on, the blind caller is their team's bidder of record: if they are the highest bidder at the table, they work the kitty, and they see the kitty when they pick it up.</p>
       <h3>Format</h3>
       <p>V1 plays Partners format: seats 1 and 3 against seats 2 and 4. Bots fill any empty seat when the host starts the game, so one person can play a full table solo.</p>
     </div>
@@ -105,6 +109,8 @@
       <p style="margin:0 0 6px"><b>House Rules</b> <span class="muted">(host sets these)</span></p>
       <label class="toggle"><input type="checkbox" id="rule-jjdd"><span>Joker Joker Deuce Deuce<small>Big Joker, Little Joker, 2 of Spades, 2 of Diamonds are the top four trump, in that order.</small></span></label>
       <label class="toggle"><input type="checkbox" id="rule-kitty"><span>Play with the Kitty<small>12 cards each plus a 4 card kitty. The high bidder picks it up and puts 4 back.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="rule-firsthand"><span>First Hand Bids Itself<small>No bidding on hand 1. Each team scores 10 points per book it takes, and nobody can be set. With the Kitty on, the dealer works the kitty on hand 1.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="rule-blind"><span>Blind Bids<small>A team down 100 or more can call a blind team bid of 6 to 10 before seeing their cards. A blind bid is a team bid, and made blind books pay double.</small></span></label>
       <label class="toggle"><input type="checkbox" id="rule-quick"><span>Quick Game<small>Play to 250 instead of 500.</small></span></label>
     </div>
     <button id="btn-start">Start Game</button>
@@ -119,6 +125,13 @@
       <div id="players-line" style="font-size:14px; line-height:1.7"></div>
       <div class="trick" id="trick"></div>
       <p class="muted" id="last-trick"></p>
+    </div>
+    <div class="card-panel hidden" id="blind-panel">
+      <p style="margin-top:0"><b>Blind window.</b> Your team is down 100 or more. Call a blind team bid before you look at your cards, or look and bid normally. A blind bid is a team bid: your partner adds nothing on top of it.</p>
+      <div class="bids" id="blind-buttons"></div>
+      <div class="bids" style="margin-top:8px">
+        <button class="secondary" id="btn-look">Look at My Cards</button>
+      </div>
     </div>
     <div class="card-panel hidden" id="bid-panel">
       <p style="margin-top:0"><b>Your bid</b></p>
@@ -183,7 +196,7 @@ function connect(then) {
 
 function render() {
   if (!state) return;
-  const inGame = ['bidding', 'kitty', 'playing', 'handEnd', 'gameOver'].includes(state.phase);
+  const inGame = ['blind', 'bidding', 'kitty', 'playing', 'handEnd', 'gameOver'].includes(state.phase);
   $('screen-home').classList.toggle('hidden', state.phase !== 'home');
   $('screen-lobby').classList.toggle('hidden', state.phase !== 'lobby');
   $('screen-game').classList.toggle('hidden', !inGame);
@@ -198,9 +211,11 @@ function renderLobby() {
     + (state.players.length < 4 ? `<div class="player-row"><span class="muted">Empty seats fill with bots at start</span></div>` : '');
   $('rule-jjdd').checked = state.settings.jjdd;
   $('rule-kitty').checked = state.settings.kitty;
+  $('rule-firsthand').checked = !!state.settings.firstHandBidsItself;
+  $('rule-blind').checked = !!state.settings.blindBids;
   $('rule-quick').checked = state.settings.targetScore === 250;
   const dis = !state.isHost;
-  for (const id of ['rule-jjdd', 'rule-kitty', 'rule-quick']) $(id).disabled = dis;
+  for (const id of ['rule-jjdd', 'rule-kitty', 'rule-firsthand', 'rule-blind', 'rule-quick']) $(id).disabled = dis;
   $('btn-start').classList.toggle('hidden', !state.isHost);
   $('btn-addbot').classList.toggle('hidden', !state.isHost || state.players.length >= 4);
   $('lobby-wait').classList.toggle('hidden', state.isHost);
@@ -217,9 +232,11 @@ function renderGame() {
   $('players-line').innerHTML = state.players.map(p => {
     const marks = [];
     if (p.seat === state.dealerIdx) marks.push('dealer');
+    if (state.phase === 'blind' && p.blindDecision === 'pending') marks.push('blind call pending');
+    if (state.teamBlind && state.teamBlind[p.team]) marks.push(`team blind ${state.teamBlind[p.team].value}`);
     if (state.phase === 'bidding' && state.bidTurn === p.seat) marks.push('bidding now');
     if (state.phase === 'playing' && state.currentTurn === p.seat) marks.push('their play');
-    return `<div>Seat ${p.seat + 1} <b>${esc(p.name)}</b>${p.isBot ? ' (bot)' : ''}: bid <b>${p.bid ? esc(p.bid) : '...'}</b>, books <b>${p.tricks}</b>, cards <b>${p.cardCount}</b>${marks.length ? ` <span class="pill">${marks.join(', ')}</span>` : ''}</div>`;
+    return `<div>Seat ${p.seat + 1} <b>${esc(p.name)}</b>${p.isBot ? ' (bot)' : ''}: bid <b>${state.selfBidHand ? 'bids itself' : (p.bid ? esc(p.bid) : '...')}</b>, books <b>${p.tricks}</b>, cards <b>${p.cardCount}</b>${marks.length ? ` <span class="pill">${marks.join(', ')}</span>` : ''}</div>`;
   }).join('');
   const slots = [0, 1, 2, 3].map(seat => {
     const play = state.trick.find(t => t.seat === seat);
@@ -230,12 +247,23 @@ function renderGame() {
   $('last-trick').textContent = state.lastTrick ? `Last book: ${state.lastTrick.winnerName} took it. ${state.spadesBroken ? 'Spades are broken.' : 'Spades not broken yet.'}` : (state.spadesBroken ? 'Spades are broken.' : 'Spades not broken yet.');
 
   let banner = '';
+  if (state.phase === 'blind') banner = me.blindDecision === 'pending' ? `Hand ${state.handNumber}: your team is down 100 or more. Call it blind, or look at your cards.` : `Hand ${state.handNumber}: blind calls are being made before the cards come out.`;
   if (state.phase === 'bidding') banner = state.bidTurn === me.seat ? 'Your bid. Call it.' : `Hand ${state.handNumber}: waiting on bids.`;
-  if (state.phase === 'kitty') banner = state.kittyWinnerIdx === me.seat ? 'You won the kitty. Put 4 back.' : `${esc((state.players[state.kittyWinnerIdx] || {}).name || 'High bidder')} is working the kitty.`;
-  if (state.phase === 'playing') banner = state.currentTurn === me.seat ? 'Your play.' : `Hand ${state.handNumber}: ${esc((state.players[state.currentTurn] || {}).name || '')} to play.`;
+  if (state.phase === 'kitty') banner = state.selfBidHand
+    ? (state.kittyWinnerIdx === me.seat ? 'First hand bids itself, so the dealer works the kitty. That is you. Put 4 back.' : `First hand bids itself, so the dealer, ${esc((state.players[state.kittyWinnerIdx] || {}).name || 'Dealer')}, is working the kitty.`)
+    : (state.kittyWinnerIdx === me.seat ? 'You won the kitty. Put 4 back.' : `${esc((state.players[state.kittyWinnerIdx] || {}).name || 'High bidder')} is working the kitty.`);
+  if (state.phase === 'playing') banner = (state.currentTurn === me.seat ? 'Your play.' : `Hand ${state.handNumber}: ${esc((state.players[state.currentTurn] || {}).name || '')} to play.`) + (state.selfBidHand ? ' First hand bids itself: no bids, your team scores 10 a book for what it takes.' : '');
   if (state.phase === 'handEnd') banner = 'Hand scored. See the breakdown below.';
   if (state.phase === 'gameOver') banner = state.winnerTeam === me.team ? 'Your team takes the game!' : `${esc(teamNames(state.winnerTeam))} take the game.`;
   $('banner').textContent = banner;
+
+  // Blind panel
+  const showBlind = state.phase === 'blind' && me.blindDecision === 'pending';
+  $('blind-panel').classList.toggle('hidden', !showBlind);
+  if (showBlind) {
+    $('blind-buttons').innerHTML = [6, 7, 8, 9, 10].map(v => `<button data-blind="${v}">Blind ${v}</button>`).join('');
+    for (const b of $('blind-buttons').querySelectorAll('button')) b.addEventListener('click', () => send({ type: 'blindDeclare', value: Number(b.dataset.blind) }));
+  }
 
   // Bidding panel
   const showBid = state.phase === 'bidding' && state.bidTurn === me.seat && !me.bid;
@@ -254,7 +282,7 @@ function renderGame() {
 
   // Hand
   const kittyIds = new Set((me.kittyCards || []).map(c => c.id));
-  $('hand-note').textContent = state.phase === 'playing' && state.currentTurn === me.seat ? 'green light cards are legal plays' : '';
+  $('hand-note').textContent = state.phase === 'blind' && me.blindDecision === 'pending' ? 'your cards stay face down until you call blind or look' : (state.phase === 'playing' && state.currentTurn === me.seat ? 'green light cards are legal plays' : '');
   $('hand').innerHTML = me.hand.map(c => {
     let cls = '';
     if (state.phase === 'playing' && state.currentTurn === me.seat) cls = me.legal.includes(c.id) ? 'legal' : 'notlegal';
@@ -280,6 +308,8 @@ function renderGame() {
     const lh = state.lastHand;
     const rows = lh.results.map(r => {
       const notes = [];
+      if (lh.selfBid) notes.push('first hand bids itself');
+      if (r.blindValue) notes.push(r.blindAdj ? `Blind ${r.blindValue} team bid made, blind books pay double (+${r.blindAdj})` : `Blind ${r.blindValue} team bid`);
       if (r.set) notes.push('SET');
       for (const n of r.nilResults) notes.push(n.ok ? 'Nil made (+100)' : 'Nil busted (-100)');
       for (const pr of r.possibleResults) notes.push(pr.adj > 0 ? 'Possible hit (+20)' : pr.adj < 0 ? 'Possible missed (-20)' : 'Possible made (exactly 2)');
@@ -288,7 +318,7 @@ function renderGame() {
       return `<tr><th>${esc(teamNames(r.team))}</th><td>bid ${r.teamBid}</td><td>books ${r.teamTricks}</td><td><b>${r.total >= 0 ? '+' : ''}${r.total}</b></td><td>${esc(notes.join(', '))}</td></tr>`;
     }).join('');
     result.innerHTML = `<p style="margin-top:0"><b>Hand ${lh.handNumber} result</b></p><table class="breakdown">${rows}</table>
-      <p class="muted">Bids: ${lh.bids.map(esc).join(' | ')}. Books by seat: ${lh.tricks.join(' | ')}. Score: ${state.scores[0]} to ${state.scores[1]}.</p>`;
+      <p class="muted">${lh.selfBid ? 'First hand bids itself: each team bid equals its books taken.' : `Bids: ${lh.bids.map(esc).join(' | ')}.`} Books by seat: ${lh.tricks.join(' | ')}. Score: ${state.scores[0]} to ${state.scores[1]}.</p>`;
     result.classList.remove('hidden');
   } else result.classList.add('hidden');
 
@@ -311,11 +341,12 @@ $('btn-join').addEventListener('click', () => {
   const token = savedCode === code ? localStorage.getItem('tap-token') : null;
   connect(() => send({ type: 'join', code, name, token }));
 });
-for (const [id, fn] of [['rule-jjdd', () => ({ jjdd: $('rule-jjdd').checked })], ['rule-kitty', () => ({ kitty: $('rule-kitty').checked })], ['rule-quick', () => ({ targetScore: $('rule-quick').checked ? 250 : 500 })]]) {
+for (const [id, fn] of [['rule-jjdd', () => ({ jjdd: $('rule-jjdd').checked })], ['rule-kitty', () => ({ kitty: $('rule-kitty').checked })], ['rule-firsthand', () => ({ firstHandBidsItself: $('rule-firsthand').checked })], ['rule-blind', () => ({ blindBids: $('rule-blind').checked })], ['rule-quick', () => ({ targetScore: $('rule-quick').checked ? 250 : 500 })]]) {
   $(id).addEventListener('change', () => send({ type: 'setSettings', settings: fn() }));
 }
 $('btn-addbot').addEventListener('click', () => send({ type: 'addBot' }));
 $('btn-start').addEventListener('click', () => send({ type: 'startGame' }));
+$('btn-look').addEventListener('click', () => send({ type: 'blindLook' }));
 $('btn-nil').addEventListener('click', () => send({ type: 'bid', bidKind: 'nil' }));
 $('btn-possible').addEventListener('click', () => send({ type: 'bid', bidKind: 'possible' }));
 $('btn-kitty').addEventListener('click', () => { send({ type: 'kittyDiscard', cardIds: [...kittyPicks] }); kittyPicks = new Set(); });
